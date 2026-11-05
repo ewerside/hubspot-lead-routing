@@ -1,0 +1,6 @@
+.env
+.venv/
+__pycache__/
+config/
+data/*
+!data/sample_leads.jsonl
