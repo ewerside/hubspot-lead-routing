@@ -1,0 +1,1036 @@
+{
+  "name": "portfolio lead intake",
+  "nodes": [
+    {
+      "id": "68306db7-8abe-52a8-95ab-378acb0d572f",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-intake",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "webhookId": "4a1f8a2e-7c55-4b8e-9d1e-1ead1e1ead01"
+    },
+    {
+      "id": "a081ff7d-a832-55f5-8850-12612b05352a",
+      "name": "Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// One webhook call carries one lead. Clean the fields the rest of the flow relies on.\nconst body = $json.body ?? {};\nconst text = (value) => (typeof value === 'string' ? value.trim() : '');\nconst capitalize = (name) => name.toLowerCase().replace(/(^|[\\s'-])\\p{L}/gu, (m) => m.toUpperCase());\n\nconst email = text(body.email).toLowerCase();\nconst firstName = capitalize(text(body.first_name));\nconst lastName = capitalize(text(body.last_name));\nconst website = text(body.website);\nconst siteDomain = website.toLowerCase().replace(/^https?:\\/\\//, '').replace(/^www\\./, '').split(/[/?#]/)[0];\nconst emailOk = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email);\n\nreturn {\n  json: {\n    submission_id: text(body.submission_id) || $execution.id,\n    received_at: new Date().toISOString(),\n    first_name: firstName,\n    last_name: lastName,\n    email,\n    phone: text(body.phone).replace(/\\D/g, ''),\n    company: text(body.company),\n    website,\n    domain: siteDomain || (emailOk ? email.split('@')[1] : ''),\n    job_title: text(body.job_title),\n    company_size: text(body.company_size),\n    country: text(body.country),\n    message: text(body.message),\n    submitted_at: text(body.submitted_at),\n    is_junk: !emailOk || !(firstName || lastName),\n  },\n};\n"
+      }
+    },
+    {
+      "id": "e5724a5b-31f1-505d-9c8e-90a998d07df7",
+      "name": "Seen before?",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select exists(select 1 from lead_log where submission_id = $1) as seen",
+        "options": {
+          "queryReplacement": "={{ [$('Normalize').first().json.submission_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "{{CRED_SUPABASE}}",
+          "name": "portfolio lead-routing Supabase"
+        }
+      }
+    },
+    {
+      "id": "17ec912c-0019-5018-9d2a-a0e2dbf7e4d3",
+      "name": "Already processed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "34c22af6-d5f6-534e-a762-b109d3a6587c",
+              "leftValue": "={{ $json.seen }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e28fb311-1c24-5eee-9fe1-4513fa16124a",
+      "name": "Respond already processed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        100
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"status\": \"already_processed\"}",
+        "options": {}
+      }
+    },
+    {
+      "id": "915d3082-fd3d-5ad7-bcb5-05699ff0f2b2",
+      "name": "Junk?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "aab602a0-8d88-5069-b569-a57c592e2a24",
+              "leftValue": "={{ $('Normalize').first().json.is_junk }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "0f5d2b35-13c9-5947-a22e-dcc18cc55d27",
+      "name": "Log rejected",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into lead_log (submission_id, received_at, email, company, path) values ($1, $2, $3, $4, 'rejected') on conflict (submission_id) do nothing",
+        "options": {
+          "queryReplacement": "={{ [$('Normalize').first().json.submission_id, $('Normalize').first().json.received_at, $('Normalize').first().json.email, $('Normalize').first().json.company] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "{{CRED_SUPABASE}}",
+          "name": "portfolio lead-routing Supabase"
+        }
+      }
+    },
+    {
+      "id": "8525a480-acb1-5706-8a32-ae589e0e076b",
+      "name": "Respond rejected",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        100
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"status\": \"rejected\", \"reason\": \"invalid email or empty name\"}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "6eddc8b6-69df-536e-8063-64322d012e70",
+      "name": "Find contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/batch/read",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ idProperty: 'email', inputs: [{ id: $('Normalize').first().json.email }], properties: ['email', 'lead_submission_id'] }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CRED_HUBSPOT}}",
+          "name": "portfolio lead-routing HubSpot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "3caf6ea0-97a9-54e7-a742-3f0fbcc52826",
+      "name": "Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "26f325ff-8484-564e-b452-76c3038c3ea5",
+              "leftValue": "={{ $json.results.length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "58e57412-cc50-521e-b642-75cc26fa0c3d",
+      "name": "Update contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        100
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.hubapi.com/crm/v3/objects/contacts/{{ $json.results[0].id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { lead_submission_id: $('Normalize').first().json.submission_id } }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CRED_HUBSPOT}}",
+          "name": "portfolio lead-routing HubSpot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "82622b62-a09a-5be6-90be-62f4b381f5fb",
+      "name": "Log duplicate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1760,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into lead_log (submission_id, received_at, email, company, path, hubspot_contact_id) values ($1, $2, $3, $4, 'duplicate', $5) on conflict (submission_id) do nothing",
+        "options": {
+          "queryReplacement": "={{ [$('Normalize').first().json.submission_id, $('Normalize').first().json.received_at, $('Normalize').first().json.email, $('Normalize').first().json.company, $json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "{{CRED_SUPABASE}}",
+          "name": "portfolio lead-routing Supabase"
+        }
+      }
+    },
+    {
+      "id": "78b67d4c-0048-5b9d-b6d6-19629a8dec98",
+      "name": "Respond duplicate",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        100
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"status\": \"duplicate\"}",
+        "options": {}
+      }
+    },
+    {
+      "id": "1500fd8a-b2cb-5790-9500-3c646796370d",
+      "name": "Score lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: '{{LLM_MODEL}}', max_tokens: 300, system: \"You score inbound leads for Fieldnote, a SaaS that construction companies use to track projects: daily logs, site photos and punch lists. The ideal customer is a builder or contractor with 51 or more employees, and the sender is an owner, director, operations manager or project manager.\\n\\nPick one intent: demo_request, pricing, support_existing_customer, partnership, job_seeker or spam.\\n\\nScore from 0 to 100 and set the tier from the score: hot is 70 to 100, warm is 40 to 69, cold is 0 to 39. A demo or pricing request from a decision maker at a company with 51 or more employees is hot. A demo or pricing request from anyone else is warm. Support requests and partnership offers are warm at 51 or more employees and cold below that. Job seekers and spam are cold.\\n\\nWrite the reason as one short sentence. Always answer by calling record_score.\", tools: [{\"name\": \"record_score\", \"description\": \"Record the score, tier, intent and a one sentence reason for this lead.\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"score\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 100}, \"tier\": {\"type\": \"string\", \"enum\": [\"hot\", \"warm\", \"cold\"]}, \"intent\": {\"type\": \"string\", \"enum\": [\"demo_request\", \"pricing\", \"support_existing_customer\", \"partnership\", \"job_seeker\", \"spam\"]}, \"reason\": {\"type\": \"string\", \"maxLength\": 160} }, \"required\": [\"score\", \"tier\", \"intent\", \"reason\"]} }], tool_choice: { type: 'tool', name: 'record_score' }, messages: [{ role: 'user', content: ['Name: ' + $('Normalize').first().json.first_name + ' ' + $('Normalize').first().json.last_name, 'Job title: ' + $('Normalize').first().json.job_title, 'Company: ' + $('Normalize').first().json.company + ' (' + $('Normalize').first().json.company_size + ' employees)', 'Country: ' + $('Normalize').first().json.country, 'Website: ' + $('Normalize').first().json.website, 'Message: ' + $('Normalize').first().json.message].join('\\n') }] }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CRED_ANTHROPIC}}",
+          "name": "portfolio lead-routing Anthropic"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "b3005a49-6ca7-5f35-913c-b095491080ae",
+      "name": "Parse score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        240
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Keep the AI answer only if every field is valid. Otherwise Rule score takes over.\nconst INTENTS = [\"demo_request\", \"pricing\", \"support_existing_customer\", \"partnership\", \"job_seeker\", \"spam\"];\nconst tierFor = (score) => (score >= 70 ? 'hot' : score >= 40 ? 'warm' : 'cold');\nconst call = ($json.content ?? []).find((b) => b.type === 'tool_use' && b.name === 'record_score');\nconst s = call?.input ?? {};\nconst ok =\n  Number.isInteger(s.score) && s.score >= 0 && s.score <= 100 &&\n  s.tier === tierFor(s.score) &&\n  INTENTS.includes(s.intent) &&\n  typeof s.reason === 'string' && s.reason.trim() !== '';\n\nif (!ok) {\n  return { json: { score_source: null, problem: call ? 'bad values: ' + JSON.stringify(s) : 'no record_score call' } };\n}\nreturn { json: { score: s.score, tier: s.tier, intent: s.intent, reason: s.reason.trim().slice(0, 160), score_source: 'llm' } };\n"
+      }
+    },
+    {
+      "id": "a51d27a4-d8eb-5b6a-b55e-bd75da92e810",
+      "name": "Rule score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Plan B when the AI call fails or its answer is unusable: a fixed rule on title, size and message words.\nif ($json.score_source === 'llm') {\n  return { json: $json };\n}\nconst lead = $('Normalize').first().json;\nconst text = lead.message.toLowerCase();\nconst has = (...words) => words.some((w) => text.includes(w));\n\nlet intent = 'demo_request';\nif (has('seo', 'backlink', 'guest post', 'email list', 'click to claim', 'free audit')) intent = 'spam';\nelse if (has('hiring', 'open role', ' cv', 'resume', 'internship', 'join the')) intent = 'job_seeker';\nelse if (has('partner', 'integration', 'resell', 'referral', 'co-marketing')) intent = 'partnership';\nelse if (has('price', 'pricing', 'cost', 'quote', 'plans', 'budget')) intent = 'pricing';\nelse if (has('already on', 'stopped', \"can't\", 'reset', 'export', 'how do i', 'bug')) intent = 'support_existing_customer';\n\nconst big = ['51-200', '201-1000', '1000+'].includes(lead.company_size);\nconst decisionMaker = /owner|director|operations manager|project manager/i.test(lead.job_title);\n\nlet score = 10;\nif (intent === 'demo_request' || intent === 'pricing') score = decisionMaker && big ? 80 : 55;\nelse if (intent === 'support_existing_customer' || intent === 'partnership') score = big ? 45 : 25;\nconst tier = score >= 70 ? 'hot' : score >= 40 ? 'warm' : 'cold';\n\nconst who = decisionMaker ? 'decision maker' : 'other role';\nconst size = lead.company_size || 'unknown size';\nreturn {\n  json: { score, tier, intent, reason: `Rule: ${intent.replace(/_/g, ' ')}, ${who}, ${size}.`, score_source: 'rule' },\n};\n"
+      }
+    },
+    {
+      "id": "f551f6e2-cb0d-5348-8d6c-7169a73d671c",
+      "name": "Find company",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/companies/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filterGroups: [{ filters: [{ propertyName: 'domain', operator: 'EQ', value: $('Normalize').first().json.domain }] }], properties: ['name', 'domain'], limit: 1 }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CRED_HUBSPOT}}",
+          "name": "portfolio lead-routing HubSpot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "a92d2c89-5d4e-5525-b1dd-9c170047ee87",
+      "name": "Company exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "edeaa62f-fb25-5785-8220-643627d08061",
+              "leftValue": "={{ $json.total > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "5d6b20aa-9e29-56d6-bf45-bb5421eb356a",
+      "name": "Create company",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        460
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/companies",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { name: $('Normalize').first().json.company || $('Normalize').first().json.domain, domain: $('Normalize').first().json.domain } }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CRED_HUBSPOT}}",
+          "name": "portfolio lead-routing HubSpot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "9fe6c60f-4ed3-5ba5-a693-027cc622e5eb",
+      "name": "Create contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { email: $('Normalize').first().json.email, firstname: $('Normalize').first().json.first_name, lastname: $('Normalize').first().json.last_name, phone: $('Normalize').first().json.phone, company: $('Normalize').first().json.company, website: $('Normalize').first().json.website, jobtitle: $('Normalize').first().json.job_title, country: $('Normalize').first().json.country, message: $('Normalize').first().json.message, lead_score: $('Rule score').first().json.score, lead_tier: $('Rule score').first().json.tier, lead_intent: $('Rule score').first().json.intent, lead_reason: $('Rule score').first().json.reason, lead_submission_id: $('Normalize').first().json.submission_id }, associations: [{ to: { id: $json.results ? $json.results[0].id : $json.id }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 1 }] }] }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CRED_HUBSPOT}}",
+          "name": "portfolio lead-routing HubSpot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "ae4ae994-01bd-572a-9edc-560a2b1a6b6a",
+      "name": "Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        3080,
+        300
+      ],
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 2,
+        "output": "={{ $('Rule score').first().json.tier === 'cold' ? 1 : 0 }}"
+      }
+    },
+    {
+      "id": "89b6da88-f28d-544d-98ea-e27ffeea662e",
+      "name": "Create deal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3300,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/deals",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { dealname: $('Normalize').first().json.company + ' (' + $('Normalize').first().json.first_name + ' ' + $('Normalize').first().json.last_name + ')', pipeline: '{{PIPELINE_ID}}', dealstage: '{{STAGE_ID}}', hubspot_owner_id: $('Rule score').first().json.tier === 'hot' ? '{{OWNER_ID}}' : undefined }, associations: [{ to: { id: $('Create contact').first().json.id }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 3 }] }, { to: { id: ($('Create company').isExecuted ? $('Create company').first().json.id : $('Find company').first().json.results[0].id) }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 5 }] }] }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "{{CRED_HUBSPOT}}",
+          "name": "portfolio lead-routing HubSpot"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "649f4227-107a-5d89-8d68-a47defbbede0",
+      "name": "Hot?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3520,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1a62cf7c-997f-54a4-8708-8d792c0ef432",
+              "leftValue": "={{ $('Rule score').first().json.tier === 'hot' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "acb19432-bdc8-5f74-b901-d9b61c27b88f",
+      "name": "Alert Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3740,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "{{SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: 'Hot lead: ' + $('Normalize').first().json.first_name + ' ' + $('Normalize').first().json.last_name + ', ' + $('Normalize').first().json.company + '. Score ' + $('Rule score').first().json.score + ': ' + $('Rule score').first().json.reason + '\\n<https://app.hubspot.com/contacts/{{HUBSPOT_PORTAL_ID}}/deal/' + $('Create deal').first().json.id + '|Open the deal in HubSpot>' }) }}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "dcb70b24-66ff-5b34-b221-bdd9fdc32709",
+      "name": "Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3960,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into lead_log (submission_id, received_at, email, company, score, tier, intent, reason, score_source, path, hubspot_contact_id, hubspot_deal_id, alerted_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'new', $10, $11, $12) on conflict (submission_id) do nothing",
+        "options": {
+          "queryReplacement": "={{ [$('Normalize').first().json.submission_id, $('Normalize').first().json.received_at, $('Normalize').first().json.email, $('Normalize').first().json.company, $('Rule score').first().json.score, $('Rule score').first().json.tier, $('Rule score').first().json.intent, $('Rule score').first().json.reason, $('Rule score').first().json.score_source, $('Create contact').first().json.id, ($('Create deal').isExecuted ? $('Create deal').first().json.id : null), (($('Alert Slack').isExecuted && !$('Alert Slack').first().json.error) ? new Date().toISOString() : null)] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "{{CRED_SUPABASE}}",
+          "name": "portfolio lead-routing Supabase"
+        }
+      }
+    },
+    {
+      "id": "f6e843bc-634c-50c7-a8e3-6b214f1c0afb",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4180,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'ok', tier: $('Rule score').first().json.tier } }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "f879b0ae-f049-5d07-955b-e805611a5d98",
+      "name": "Queue failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2640,
+        700
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into failed_leads (submission_id, node, error, payload) values ($1, $2, $3, $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [$('Normalize').first().json.submission_id, $prevNode.name, JSON.stringify($json.error ?? $json).slice(0, 2000), JSON.stringify($('Normalize').first().json)] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "{{CRED_SUPABASE}}",
+          "name": "portfolio lead-routing Supabase"
+        }
+      }
+    },
+    {
+      "id": "df27c8a9-d54a-5ce6-b30b-4da191aa3da1",
+      "name": "Respond queued",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2860,
+        700
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"status\": \"queued\"}",
+        "options": {
+          "responseCode": 202
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize": {
+      "main": [
+        [
+          {
+            "node": "Seen before?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seen before?": {
+      "main": [
+        [
+          {
+            "node": "Already processed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log rejected": {
+      "main": [
+        [
+          {
+            "node": "Respond rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log duplicate": {
+      "main": [
+        [
+          {
+            "node": "Respond duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse score": {
+      "main": [
+        [
+          {
+            "node": "Rule score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rule score": {
+      "main": [
+        [
+          {
+            "node": "Find company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Slack": {
+      "main": [
+        [
+          {
+            "node": "Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue failure": {
+      "main": [
+        [
+          {
+            "node": "Respond queued",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already processed?": {
+      "main": [
+        [
+          {
+            "node": "Respond already processed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Junk?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Junk?": {
+      "main": [
+        [
+          {
+            "node": "Log rejected",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Find contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find contact": {
+      "main": [
+        [
+          {
+            "node": "Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Update contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Score lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update contact": {
+      "main": [
+        [
+          {
+            "node": "Log duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score lead": {
+      "main": [
+        [
+          {
+            "node": "Parse score",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rule score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find company": {
+      "main": [
+        [
+          {
+            "node": "Company exists?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Company exists?": {
+      "main": [
+        [
+          {
+            "node": "Create contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create company": {
+      "main": [
+        [
+          {
+            "node": "Create contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create contact": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Create deal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create deal": {
+      "main": [
+        [
+          {
+            "node": "Hot?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hot?": {
+      "main": [
+        [
+          {
+            "node": "Alert Slack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "{{ERROR_WORKFLOW_ID}}"
+  }
+}
