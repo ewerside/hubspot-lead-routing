@@ -1,6 +1,7 @@
 """Resend every queued lead that was not replayed yet, then mark it as replayed.
 
-If a lead fails again, the flow queues it as a new row, so nothing is lost.
+If a lead fails again, the flow queues it as a new row, so nothing is lost. A lead
+that already failed MAX_TRIES times is left in the queue for a person to look at.
 """
 
 import sys
@@ -15,8 +16,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import env, n8n_base_url
 
+# A lead HubSpot rejects for good (bad data, not an outage) would otherwise loop forever.
+MAX_TRIES = 3
 
-def main() -> None:
+
+def flow_status(resp: httpx.Response) -> str:
+    try:
+        return resp.json().get("status", "")
+    except ValueError:
+        return resp.text[:80]
+
+
+def main() -> int:
     url = f"{n8n_base_url()}/webhook/lead-intake"
     answers: Counter = Counter()
     try:
@@ -25,17 +36,22 @@ def main() -> None:
             httpx.Client(timeout=90) as client,
         ):
             rows = conn.execute(
-                "select id, submission_id, payload from failed_leads "
-                "where replayed_at is null order by id"
+                "select f.id, f.submission_id, f.payload, "
+                "(select count(*) from failed_leads g where g.submission_id = f.submission_id) "
+                "from failed_leads f where f.replayed_at is null order by f.id"
             ).fetchall()
-            for row_id, submission_id, payload in rows:
+            for row_id, submission_id, payload, tries in rows:
+                if tries >= MAX_TRIES:
+                    print(f"{submission_id}: failed {tries} times, check failed_leads")
+                    answers["left for a person"] += 1
+                    continue
                 try:
                     resp = client.post(url, json=payload)
                 except httpx.HTTPError as exc:
                     print(f"{submission_id}: not sent, will retry next run ({exc})")
                     answers["not sent"] += 1
                     continue
-                status = resp.json().get("status", "") if resp.content else ""
+                status = flow_status(resp)
                 print(f"{submission_id}: {resp.status_code} {status}")
                 answers[f"{resp.status_code} {status}"] += 1
                 if resp.is_success:
@@ -49,11 +65,11 @@ def main() -> None:
 
     if not answers:
         print("nothing to replay")
-        return
+        return 0
     print("replayed: " + ", ".join(f"{k} x{v}" for k, v in answers.most_common()))
-    if answers["202 queued"]:
-        print("some leads failed again and are back in the queue")
+    done = sum(v for k, v in answers.items() if k.startswith("200 "))
+    return 0 if done == sum(answers.values()) else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -63,18 +63,14 @@ def replacements(ids: dict[str, str]) -> list[tuple[str, str]]:
     ]
 
 
-def secrets_left() -> list[str]:
+def secrets_in(text: str) -> list[str]:
     patterns = ["pat-", "sk-ant", "hooks.slack.com", env("HUBSPOT_PORTAL_ID")]
-    return [
-        f"{path.name}: {p}"
-        for path in sorted(N8N_DIR.glob("*.json"))
-        for p in patterns
-        if p in path.read_text(encoding="utf-8")
-    ]
+    return [p for p in patterns if p in text]
 
 
 def main() -> None:
     headers = {"X-N8N-API-KEY": env("N8N_API_KEY")}
+    exports = {}
     try:
         with httpx.Client(
             base_url=f"{n8n_base_url()}/api/v1", headers=headers, timeout=30
@@ -92,15 +88,18 @@ def main() -> None:
                 text = json.dumps(keep, indent=2, ensure_ascii=False)
                 for value, marker in swaps:
                     text = text.replace(value, marker)
-                (N8N_DIR / filename).write_text(text + "\n", encoding="utf-8")
-                print(f"exported {name} to n8n/{filename}")
+                exports[filename] = text
     except (RuntimeError, httpx.HTTPError) as exc:
         raise SystemExit(f"export_n8n failed: {exc}") from None
 
-    leaks = secrets_left()
+    # Check before writing: a leaked file in n8n/ is one commit away from the public repo.
+    leaks = [f"{f}: {p}" for f, text in exports.items() for p in secrets_in(text)]
     if leaks:
-        raise SystemExit("secret found, do not commit: " + "; ".join(leaks))
-    print("secret check passed: no token, key, Slack URL or portal id in n8n/")
+        raise SystemExit("secret found, nothing written: " + "; ".join(leaks))
+    for filename, text in exports.items():
+        (N8N_DIR / filename).write_text(text + "\n", encoding="utf-8")
+        print(f"exported n8n/{filename}")
+    print("secret check passed: no token, key, Slack URL or portal id in the export")
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ def supabase_data() -> dict:
         "password": unquote(url.password or ""),
         # Supabase's pooler signs its certificate with its own CA, and this credential
         # type has no field for a custom CA. Traffic stays encrypted; only the CA check
-        # is skipped. Owner's choice over adding the CA to the n8n server.
+        # is skipped. I chose this over adding the CA to the n8n server.
         "allowUnauthorizedCerts": True,
         "sshTunnel": False,
     }
