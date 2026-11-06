@@ -34,5 +34,5 @@ Rows are the answer key, columns are what the flow decided:
 ## Speed
 
 - Median time from the webhook to the Slack alert: 3.8 s over 30 alerts.
-- Median webhook response: 3.6 s over the last 200 sends.
-- Hot leads: 30, alerts sent: 30.
+- Median webhook response: 3.6 s over the 200 sends of the last full run.
+- Leads the flow scored hot: 30, Slack alerts sent: 30.

@@ -32,7 +32,11 @@ def load_key() -> dict[str, dict]:
         return {r["submission_id"]: r for r in csv.DictReader(fh)}
 
 
-def load_db() -> tuple[list[dict], tuple[int, int]]:
+def load_db(key: dict[str, dict]) -> tuple[list[dict], tuple[int, int]]:
+    """lead_log rows and (queued, replayed) counts, only for the leads in the answer key.
+
+    Demo and test leads sent later never change the report.
+    """
     query = (
         "select submission_id, path, tier, intent, score_source, received_at, alerted_at "
         "from lead_log"
@@ -43,11 +47,12 @@ def load_db() -> tuple[list[dict], tuple[int, int]]:
             names = [c.name for c in cur.description]
             rows = [dict(zip(names, r)) for r in cur.fetchall()]
             failed = conn.execute(
-                "select count(*), count(replayed_at) from failed_leads"
-            ).fetchone()
+                "select submission_id, replayed_at is not null from failed_leads"
+            ).fetchall()
     except psycopg.Error as exc:
         raise SystemExit(f"report: database error: {exc}") from None
-    return rows, failed
+    failed = [done for sid, done in failed if sid in key]
+    return [r for r in rows if r["submission_id"] in key], (len(failed), sum(failed))
 
 
 def webhook_median_ms() -> float | None:
@@ -124,7 +129,7 @@ def write_markdown(n: dict) -> None:
         else "no alerts"
     )
     webhook = (
-        f"{n['webhook_ms'] / 1000:.1f} s over the last 200 sends"
+        f"{n['webhook_ms'] / 1000:.1f} s over the 200 sends of the last full run"
         if n["webhook_ms"]
         else "no send log"
     )
@@ -163,7 +168,7 @@ Rows are the answer key, columns are what the flow decided:
 
 - Median time from the webhook to the Slack alert: {alert}.
 - Median webhook response: {webhook}.
-- Hot leads: {n["hot"]}, alerts sent: {n["alerted"]}.
+- Leads the flow scored hot: {n["hot"]}, Slack alerts sent: {n["alerted"]}.
 """
     (DOCS_DIR / "report.md").write_text(text, encoding="utf-8")
 
@@ -205,8 +210,9 @@ def plot(matrix: list[list[int]], total: int) -> None:
 
 
 def main() -> None:
-    rows, failed = load_db()
-    numbers = compute(rows, load_key(), failed)
+    key = load_key()
+    rows, failed = load_db(key)
+    numbers = compute(rows, key, failed)
     DOCS_DIR.mkdir(exist_ok=True)
     write_markdown(numbers)
     plot(numbers["matrix"], numbers["new_count"])
