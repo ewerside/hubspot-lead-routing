@@ -26,7 +26,7 @@
         "url": "{{SLACK_WEBHOOK_URL}}",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ text: 'n8n error in ' + $json.workflow.name + ', node ' + $json.execution.lastNodeExecuted + ': ' + $json.execution.error.message + '\\n' + $json.execution.url }) }}",
+        "jsonBody": "={{ JSON.stringify({ text: 'n8n error in ' + String($json.workflow.name).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]) + ', node ' + String($json.execution.lastNodeExecuted).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]) + ': ' + String($json.execution.error.message).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]) + '\\n' + $json.execution.url }) }}",
         "options": {}
       },
       "retryOnFail": true,
