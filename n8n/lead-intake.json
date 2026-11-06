@@ -655,7 +655,7 @@
         "operation": "executeQuery",
         "query": "insert into failed_leads (submission_id, node, error, payload) values ($1, $2, $3, $4::jsonb)",
         "options": {
-          "queryReplacement": "={{ [$('Normalize').first().json.submission_id, $prevNode.name, JSON.stringify($json.error ?? $json).slice(0, 2000), JSON.stringify($('Normalize').first().json)] }}"
+          "queryReplacement": "={{ [$('Normalize').first().json.submission_id, $prevNode.name, String($json.error?.message ?? JSON.stringify($json.error ?? $json)).slice(0, 2000),JSON.stringify($('Normalize').first().json)] }}"
         }
       },
       "credentials": {
