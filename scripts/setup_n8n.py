@@ -1,7 +1,8 @@
-"""Create this project's n8n credentials from .env and save their ids.
+"""Create or update this project's n8n credentials from .env and save their ids.
 
 The ids go to config/n8n.json, which deploy_n8n.py reads. Secrets go from .env
-straight to the n8n API and are never printed or written anywhere else.
+straight to the n8n API and are never printed or written anywhere else. Run it
+again after changing a key in .env to push the new value to n8n.
 """
 
 import json
@@ -34,8 +35,10 @@ def supabase_data() -> dict:
         "database": url.path.lstrip("/") or "postgres",
         "user": unquote(url.username or ""),
         "password": unquote(url.password or ""),
-        "ssl": "require",
-        "allowUnauthorizedCerts": False,
+        # Supabase's pooler signs its certificate with its own CA, and this credential
+        # type has no field for a custom CA. Traffic stays encrypted; only the CA check
+        # is skipped. Owner's choice over adding the CA to the n8n server.
+        "allowUnauthorizedCerts": True,
         "sshTunnel": False,
     }
 
@@ -102,8 +105,11 @@ def main() -> None:
                         f"'{cred['name']}' exists with type {current['type']}, "
                         f"expected {cred['type']}"
                     )
-                status = "already there"
-                if not current:
+                if current:
+                    path = f"/credentials/{current['id']}"
+                    current = checked(client.patch(path, json=cred)).json()
+                    status = "updated"
+                else:
                     current = checked(client.post("/credentials", json=cred)).json()
                     status = "created"
                 saved[key] = {"id": current["id"], "name": current["name"]}
