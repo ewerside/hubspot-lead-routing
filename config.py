@@ -6,6 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent
+CONFIG_DIR = ROOT / "config"
 load_dotenv(ROOT / ".env")
 
 DEFAULTS = {"LLM_MODEL": "claude-haiku-5-5"}
