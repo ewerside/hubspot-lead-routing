@@ -20,4 +20,5 @@ With seed 42 that gives 29 hot, 86 warm and 55 cold among the 170 new leads.
 
 - Supabase's free plan allows 2 projects, so this repo shares a portfolio project with other work. It connects as its own role, `lead_routing`, whose default schema is also `lead_routing`. That role cannot read or write any other table in the project.
 - Slack's "Create New App" dialog no longer has a "From scratch" option. I used "Pick features" and added only the `incoming-webhook` scope.
+- I create the n8n credentials with `scripts/setup_n8n.py` through the n8n API instead of by hand, so no secret is typed or shown on screen. They are named `portfolio lead-routing ...` because another portfolio project on the same n8n already uses `portfolio Anthropic` and `portfolio Supabase`. The HubSpot and Anthropic credentials only work for their own API domain.
 - In HubSpot, private apps now live under Development > Legacy apps. The plain `tickets` scope is gone, so the app has `crm.objects.tickets.read` and `crm.objects.tickets.write` instead.
