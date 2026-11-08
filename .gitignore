@@ -4,4 +4,3 @@ __pycache__/
 config/
 data/*
 !data/sample_leads.jsonl
-video/out/
